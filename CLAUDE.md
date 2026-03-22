@@ -1,5 +1,8 @@
 # OpenTrackFit - Development Guide
 
+## IMPORTANT: Public Repository
+This is a **public open-source repository**. Never commit sensitive data such as passwords, API keys, tokens, IP addresses, hostnames, or any personal credentials. All user-specific configuration (WiFi, MQTT, HTTP webhook, profiles) is entered at runtime and stored in NVS on the ESP32 — not in source code. When making changes, always verify that no sensitive information is hardcoded or accidentally included.
+
 ## Project Overview
 ESP32 firmware (PlatformIO/Arduino) that reads weight data from a FitTrack BLE body composition scale and serves it via a web interface. Supports MQTT and HTTP webhook forwarding.
 
