@@ -396,7 +396,7 @@ const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
 </style>
 </head><body>
 <h1>OpenTrackFit</h1>
-<a class="home" href="/">Zurueck zur Startseite</a>
+<a class="home" href="/">zur Startseite</a>
 <div class="spinner-wrap" id="loader"><div class="spinner"></div></div>
 <div class="content" id="content">
 
