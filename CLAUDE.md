@@ -69,8 +69,11 @@ All in `src/main.cpp` top section:
 - Connected via USB serial (`/dev/cu.usbserial-0001`)
 - Partition: `huge_app.csv` (3MB app, no OTA) — needed because BLE library is large
 
+## Debugging
+- **BLE raw packet logging**: `logRawData()` in `parseScaleData()` is commented out by default. Uncomment the call to see hex dumps of all BLE packets in the serial monitor — useful for reverse-engineering the scale protocol or diagnosing connection issues.
+
 ## Notes
 - `include/config.h` is gitignored (legacy from early prototyping, no longer used)
 - `volatile` variables are used for data shared between BLE callbacks and main loop
 - WiFi+BLE share the ESP32 antenna — non-blocking scan helps stability
-- Flash usage is ~56%, RAM ~19% — room for more features
+- Flash usage is ~57%, RAM ~19% — room for more features
