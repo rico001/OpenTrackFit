@@ -33,6 +33,7 @@ BLEClient* pClient = nullptr;
 volatile bool connected = false;
 bool doConnect = false;
 volatile unsigned long lastDataTime = 0;
+bool scanning = false;
 
 WebServer server(80);
 Preferences prefs;
@@ -501,10 +502,10 @@ void loop() {
         doConnect = false;
     }
 
-    // BLE: keep scanning
-    if (!connected && !doConnect) {
-        pBLEScan->start(3, false);
-        pBLEScan->clearResults();
+    // BLE: non-blocking scan
+    if (!connected && !doConnect && !scanning) {
+        pBLEScan->start(0, [](BLEScanResults) { scanning = false; }, false);
+        scanning = true;
     }
 
     // Clear live weight if no data for 5s
@@ -512,5 +513,5 @@ void loop() {
         currentWeight = 0;
     }
 
-    delay(100);
+    delay(10);
 }
