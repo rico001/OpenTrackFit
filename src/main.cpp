@@ -97,14 +97,70 @@ void setPrefInt(const char* ns, const char* key, uint16_t val) {
     prefs.end();
 }
 
+// --- Multi-Profile Storage ---
+// NVS namespace "prof", max 8 profiles
+// Keys: "count", "active", "n0".."n7" (name), "g0".."g7" (gender), "a0".."a7" (age), "h0".."h7" (height)
+#define MAX_PROFILES 8
+
+String activeProfileName = "";
+
+struct Profile {
+    String name;
+    uint16_t gender; // 0=male, 1=female
+    uint16_t age;
+    uint16_t height; // cm
+};
+
+int getProfileCount() { return getPrefInt("prof", "count", 0); }
+int getActiveIndex() { return getPrefInt("prof", "active", 0); }
+
+Profile getProfile(int idx) {
+    Profile p;
+    p.name = getPref("prof", ("n" + String(idx)).c_str());
+    p.gender = getPrefInt("prof", ("g" + String(idx)).c_str(), 0);
+    p.age = getPrefInt("prof", ("a" + String(idx)).c_str(), 0);
+    p.height = getPrefInt("prof", ("h" + String(idx)).c_str(), 0);
+    return p;
+}
+
+void setProfile(int idx, const Profile& p) {
+    setPref("prof", ("n" + String(idx)).c_str(), p.name);
+    setPrefInt("prof", ("g" + String(idx)).c_str(), p.gender);
+    setPrefInt("prof", ("a" + String(idx)).c_str(), p.age);
+    setPrefInt("prof", ("h" + String(idx)).c_str(), p.height);
+}
+
+void deleteProfile(int idx) {
+    int count = getProfileCount();
+    // Shift profiles after idx down by one
+    for (int i = idx; i < count - 1; i++) {
+        Profile p = getProfile(i + 1);
+        setProfile(i, p);
+    }
+    setPrefInt("prof", "count", count - 1);
+    int active = getActiveIndex();
+    if (active >= count - 1) setPrefInt("prof", "active", max(0, count - 2));
+    else if (active > idx) setPrefInt("prof", "active", active - 1);
+}
+
+Profile getActiveProfile() {
+    int count = getProfileCount();
+    if (count == 0) { Profile p; p.age = 0; p.height = 0; p.gender = 0; return p; }
+    int active = getActiveIndex();
+    if (active >= count) active = 0;
+    return getProfile(active);
+}
+
 // --- Body Composition Calculation ---
 // Uses BMI-based estimation formulas (no impedance data from scale)
 // Sources: Deurenberg (body fat), Mifflin-St Jeor (BMR), Hume (water)
 
 void calculateBodyComposition(float weight, const char* time) {
-    uint16_t heightCm = getPrefInt("profile", "height", 0);
-    uint16_t age = getPrefInt("profile", "age", 0);
-    uint16_t gender = getPrefInt("profile", "gender", 0); // 0=male, 1=female
+    Profile prof = getActiveProfile();
+    uint16_t heightCm = prof.height;
+    uint16_t age = prof.age;
+    uint16_t gender = prof.gender; // 0=male, 1=female
+    activeProfileName = prof.name;
 
     bodyData.weight = weight;
     strncpy(bodyData.time, time, sizeof(bodyData.time) - 1);
@@ -210,6 +266,9 @@ String buildBodyJson() {
     String j = "{";
     j += "\"weight\":" + String(bodyData.weight, 1);
     j += ",\"time\":\"" + String(bodyData.time) + "\"";
+    if (!activeProfileName.isEmpty()) {
+        j += ",\"profile\":\"" + activeProfileName + "\"";
+    }
     if (bodyData.bmi > 0) {
         j += ",\"bmi\":" + String(bodyData.bmi, 1);
         j += ",\"body_fat_pct\":" + String(bodyData.bodyFatPct, 1);
@@ -295,26 +354,38 @@ const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
   .msg{padding:10px;border-radius:6px;margin-top:10px;font-size:clamp(13px,1.5vw,15px);display:none}
   .msg.ok{display:block;background:#1b3a1b;color:#4CAF50}
   .msg.err{display:block;background:#3a1b1b;color:#f44336}
+  .spinner-wrap{display:flex;justify-content:center;align-items:center;padding:80px 0}
+  .spinner{width:40px;height:40px;border:4px solid #333;border-top:4px solid #4CAF50;border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .content{display:none}
 </style>
 </head><body>
 <h1>OpenTrackFit</h1>
 <a class="home" href="/">Zurueck zur Startseite</a>
+<div class="spinner-wrap" id="loader"><div class="spinner"></div></div>
+<div class="content" id="content">
 
 <div class="card">
-  <h2>Profil</h2>
-  <form action="/save/profile" method="POST">
-    <label>Geschlecht</label>
-    <select name="gender" id="profile_gender">
-      <option value="0">Maennlich</option>
-      <option value="1">Weiblich</option>
-    </select>
-    <label>Alter (Jahre)</label>
-    <input name="age" id="profile_age" type="number" min="10" max="99" placeholder="z.B. 35">
-    <label>Groesse (cm)</label>
-    <input name="height" id="profile_height" type="number" min="100" max="250" placeholder="z.B. 180">
-    <button type="submit">Profil speichern</button>
-    <div class="msg" id="profile-msg"></div>
-  </form>
+  <h2>Profile</h2>
+  <div id="profile-list"></div>
+  <div style="margin-top:14px;padding-top:14px;border-top:1px solid #333">
+    <div style="color:#999;font-size:13px;margin-bottom:8px">Neues Profil / Bearbeiten</div>
+    <form id="profile-form" action="/save/profile" method="POST">
+      <label>Name</label>
+      <input name="name" id="pf_name" placeholder="z.B. Rico" required>
+      <label>Geschlecht</label>
+      <select name="gender" id="pf_gender">
+        <option value="0">Maennlich</option>
+        <option value="1">Weiblich</option>
+      </select>
+      <label>Alter (Jahre)</label>
+      <input name="age" id="pf_age" type="number" min="10" max="99" placeholder="z.B. 35">
+      <label>Groesse (cm)</label>
+      <input name="height" id="pf_height" type="number" min="100" max="250" placeholder="z.B. 180">
+      <button type="submit">Profil speichern</button>
+      <div class="msg" id="profile-msg"></div>
+    </form>
+  </div>
 </div>
 
 <div class="card">
@@ -366,7 +437,21 @@ const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
 </div>
 
 <p class="info" style="text-align:center;margin-top:20px">AP schaltet sich nach 5 Min. automatisch ab.</p>
+</div>
 <script>
+var loader=document.getElementById('loader');
+var content=document.getElementById('content');
+var pending=0;
+function busy(){pending++;loader.style.display='';loader.style.padding='20px 0';}
+function done(){pending--;if(pending<=0){pending=0;loader.style.display='none';content.style.display='';}}
+function api(url,opts){
+  busy();
+  return fetch(url,opts).then(r=>r.json()).finally(done);
+}
+// Initial load: scan + settings in parallel
+var ready=0;
+function initDone(){ready++;if(ready>=2){loader.style.display='none';content.style.display='';}}
+busy();busy();
 fetch('/api/scan').then(r=>r.json()).then(d=>{
   var sel=document.getElementById('ssid');
   var inp=document.getElementById('ssid_manual');
@@ -395,30 +480,72 @@ fetch('/api/scan').then(r=>r.json()).then(d=>{
 }).catch(()=>{
   document.getElementById('scan-status').textContent='Scan fehlgeschlagen';
   document.getElementById('ssid_manual').required=true;
-});
-fetch('/api/settings').then(r=>r.json()).then(d=>{
-  if(d.mqtt_broker) document.getElementById('mqtt_broker').value=d.mqtt_broker;
-  if(d.mqtt_port) document.getElementById('mqtt_port').value=d.mqtt_port;
-  if(d.mqtt_topic) document.getElementById('mqtt_topic').value=d.mqtt_topic;
-  if(d.mqtt_user) document.getElementById('mqtt_user').value=d.mqtt_user;
-  if(d.http_webhook) document.getElementById('http_webhook').value=d.http_webhook;
-  if(d.profile_gender!==undefined) document.getElementById('profile_gender').value=d.profile_gender;
-  if(d.profile_age) document.getElementById('profile_age').value=d.profile_age;
-  if(d.profile_height) document.getElementById('profile_height').value=d.profile_height;
-}).catch(()=>{});
-document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"],form[action="/save/profile"]').forEach(function(f){
+}).finally(done);
+function loadSettings(){
+  api('/api/settings').then(d=>{
+    if(d.mqtt_broker) document.getElementById('mqtt_broker').value=d.mqtt_broker;
+    if(d.mqtt_port) document.getElementById('mqtt_port').value=d.mqtt_port;
+    if(d.mqtt_topic) document.getElementById('mqtt_topic').value=d.mqtt_topic;
+    if(d.mqtt_user) document.getElementById('mqtt_user').value=d.mqtt_user;
+    if(d.http_webhook) document.getElementById('http_webhook').value=d.http_webhook;
+    renderProfiles(d.profiles||[]);
+  }).catch(()=>{});
+}
+function renderProfiles(profiles){
+  var el=document.getElementById('profile-list');
+  if(!profiles.length){el.innerHTML='<div style="color:#666;font-size:13px">Keine Profile vorhanden</div>';return;}
+  var h='';
+  profiles.forEach(function(p){
+    var active=p.active;
+    h+='<div style="display:flex;align-items:center;gap:10px;padding:10px;margin-bottom:6px;background:'+(active?'#1b3a1b':'#222')+';border-radius:8px;border:1px solid '+(active?'#4CAF50':'#333')+'">';
+    h+='<div style="flex:1"><strong style="color:'+(active?'#4CAF50':'#eee')+'">'+p.name+'</strong>';
+    h+='<div style="color:#888;font-size:12px">'+(p.gender==0?'M':'W')+', '+p.age+' J., '+p.height+' cm</div></div>';
+    if(!active) h+='<button onclick="setActive(\''+p.name+'\')" style="width:auto;padding:6px 12px;font-size:13px;margin:0;background:#333;color:#eee">Aktivieren</button>';
+    h+='<button onclick="editProfile(\''+p.name+'\','+p.gender+','+p.age+','+p.height+')" style="width:auto;padding:6px 12px;font-size:13px;margin:0;background:#333;color:#eee">Bearbeiten</button>';
+    h+='<button onclick="delProfile(\''+p.name+'\')" style="width:auto;padding:6px 10px;font-size:13px;margin:0;background:#3a1b1b;color:#f44">X</button>';
+    h+='</div>';
+  });
+  el.innerHTML=h;
+}
+function setActive(name){
+  api('/api/set-profile',{method:'POST',body:'name='+encodeURIComponent(name),headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+    .then(()=>loadSettings()).catch(()=>{});
+}
+function delProfile(name){
+  if(!confirm(name+' loeschen?'))return;
+  api('/delete/profile',{method:'POST',body:'name='+encodeURIComponent(name),headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+    .then(()=>loadSettings()).catch(()=>{});
+}
+function editProfile(name,g,a,h){
+  document.getElementById('pf_name').value=name;
+  document.getElementById('pf_gender').value=g;
+  document.getElementById('pf_age').value=a;
+  document.getElementById('pf_height').value=h;
+}
+loadSettings();
+document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"]').forEach(function(f){
   f.onsubmit=function(e){
     e.preventDefault();
     var fd=new FormData(f);
-    var id=f.action.includes('profile')?'profile-msg':f.action.includes('mqtt')?'mqtt-msg':'http-msg';
-    fetch(f.action,{method:'POST',body:new URLSearchParams(fd)})
-      .then(r=>r.json()).then(d=>{
+    var id=f.action.includes('mqtt')?'mqtt-msg':'http-msg';
+    api(f.action,{method:'POST',body:new URLSearchParams(fd)})
+      .then(d=>{
         var m=document.getElementById(id);
         m.textContent=d.message;
         m.className='msg '+(d.ok?'ok':'err');
       }).catch(()=>{});
   };
 });
+document.getElementById('profile-form').onsubmit=function(e){
+  e.preventDefault();
+  var fd=new FormData(this);
+  api('/save/profile',{method:'POST',body:new URLSearchParams(fd)})
+    .then(d=>{
+      var m=document.getElementById('profile-msg');
+      m.textContent=d.message;m.className='msg '+(d.ok?'ok':'err');
+      if(d.ok){document.getElementById('profile-form').reset();loadSettings();}
+    }).catch(()=>{});
+};
 </script>
 </body></html>
 )rawliteral";
@@ -447,6 +574,7 @@ const char WEIGHT_PAGE[] PROGMEM = R"rawliteral(
 </style>
 </head><body>
 <h1>OpenTrackFit</h1>
+<div id="profile-name" style="color:#888;font-size:clamp(14px,2vw,18px);margin-top:6px"></div>
 <div class="hero">
   <span class="val" id="weight">--.-</span> <span class="unit">kg</span>
 </div>
@@ -474,6 +602,7 @@ const char WEIGHT_PAGE[] PROGMEM = R"rawliteral(
 function f1(v){return v.toFixed(1)}
 function load(){
   fetch('/api/last-weight-data').then(r=>r.json()).then(d=>{
+    if(d.profile) document.getElementById('profile-name').textContent=d.profile;
     if(d.weight>0){
       document.getElementById('weight').textContent=f1(d.weight);
       document.getElementById('meta').textContent=d.time?'Letzte Messung: '+d.time:'Letzte Messung';
@@ -624,14 +753,72 @@ void handleSaveHttp() {
 }
 
 void handleSaveProfile() {
+    String name = server.arg("name");
     String age = server.arg("age");
     String height = server.arg("height");
     String gender = server.arg("gender");
-    setPrefInt("profile", "age", age.isEmpty() ? 0 : age.toInt());
-    setPrefInt("profile", "height", height.isEmpty() ? 0 : height.toInt());
-    setPrefInt("profile", "gender", gender.isEmpty() ? 0 : gender.toInt());
-    Serial.printf("Profile saved: age=%s height=%s gender=%s\n", age.c_str(), height.c_str(), gender.c_str());
-    server.send(200, "application/json", "{\"ok\":true,\"message\":\"Profil gespeichert.\"}");
+
+    if (name.isEmpty()) {
+        server.send(200, "application/json", "{\"ok\":false,\"message\":\"Name fehlt.\"}");
+        return;
+    }
+
+    int count = getProfileCount();
+
+    // Check if profile with this name exists (update it)
+    int idx = -1;
+    for (int i = 0; i < count; i++) {
+        if (getPref("prof", ("n" + String(i)).c_str()) == name) { idx = i; break; }
+    }
+
+    if (idx < 0) {
+        // New profile
+        if (count >= MAX_PROFILES) {
+            server.send(200, "application/json", "{\"ok\":false,\"message\":\"Max. 8 Profile erreicht.\"}");
+            return;
+        }
+        idx = count;
+        setPrefInt("prof", "count", count + 1);
+    }
+
+    Profile p;
+    p.name = name;
+    p.gender = gender.isEmpty() ? 0 : gender.toInt();
+    p.age = age.isEmpty() ? 0 : age.toInt();
+    p.height = height.isEmpty() ? 0 : height.toInt();
+    setProfile(idx, p);
+
+    // Set as active
+    setPrefInt("prof", "active", idx);
+
+    Serial.printf("Profile saved [%d]: %s age=%d h=%d g=%d\n", idx, name.c_str(), p.age, p.height, p.gender);
+    server.send(200, "application/json", "{\"ok\":true,\"message\":\"Profil gespeichert & aktiviert.\"}");
+}
+
+void handleDeleteProfile() {
+    String name = server.arg("name");
+    int count = getProfileCount();
+    for (int i = 0; i < count; i++) {
+        if (getPref("prof", ("n" + String(i)).c_str()) == name) {
+            deleteProfile(i);
+            server.send(200, "application/json", "{\"ok\":true,\"message\":\"Profil geloescht.\"}");
+            return;
+        }
+    }
+    server.send(200, "application/json", "{\"ok\":false,\"message\":\"Profil nicht gefunden.\"}");
+}
+
+void handleSetActiveProfile() {
+    String name = server.arg("name");
+    int count = getProfileCount();
+    for (int i = 0; i < count; i++) {
+        if (getPref("prof", ("n" + String(i)).c_str()) == name) {
+            setPrefInt("prof", "active", i);
+            server.send(200, "application/json", "{\"ok\":true,\"message\":\"Profil aktiviert.\"}");
+            return;
+        }
+    }
+    server.send(200, "application/json", "{\"ok\":false,\"message\":\"Profil nicht gefunden.\"}");
 }
 
 void handleApiScan() {
@@ -662,9 +849,18 @@ void handleApiSettings() {
     json += ",\"mqtt_topic\":\"" + getPref("mqtt", "topic") + "\"";
     json += ",\"mqtt_user\":\"" + getPref("mqtt", "user") + "\"";
     json += ",\"http_webhook\":\"" + getPref("http", "webhook") + "\"";
-    json += ",\"profile_gender\":" + String(getPrefInt("profile", "gender", 0));
-    json += ",\"profile_age\":" + String(getPrefInt("profile", "age", 0));
-    json += ",\"profile_height\":" + String(getPrefInt("profile", "height", 0));
+    // Profiles
+    int count = getProfileCount();
+    int active = getActiveIndex();
+    json += ",\"profiles\":[";
+    for (int i = 0; i < count; i++) {
+        Profile p = getProfile(i);
+        if (i > 0) json += ",";
+        json += "{\"name\":\"" + p.name + "\",\"gender\":" + String(p.gender);
+        json += ",\"age\":" + String(p.age) + ",\"height\":" + String(p.height);
+        json += ",\"active\":" + String(i == active ? "true" : "false") + "}";
+    }
+    json += "]";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -680,6 +876,7 @@ void handleApiDocs() {
             "\"fields\":{"
               "\"weight\":\"Gewicht in kg\","
               "\"time\":\"Zeitpunkt (dd.mm.yyyy HH:MM)\","
+              "\"profile\":\"Name des aktiven Profils\","
               "\"bmi\":\"Body Mass Index\","
               "\"body_fat_pct\":\"Koerperfettanteil in %\","
               "\"muscle_pct\":\"Muskelanteil in %\","
@@ -711,6 +908,8 @@ void setupWebServer() {
     server.on("/save/mqtt", HTTP_POST, handleSaveMqtt);
     server.on("/save/http", HTTP_POST, handleSaveHttp);
     server.on("/save/profile", HTTP_POST, handleSaveProfile);
+    server.on("/delete/profile", HTTP_POST, handleDeleteProfile);
+    server.on("/api/set-profile", HTTP_POST, handleSetActiveProfile);
     server.on("/api/scan", handleApiScan);
     server.on("/api/last-weight-data", handleApiWeight);
     server.on("/api/settings", handleApiSettings);
