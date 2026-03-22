@@ -2,6 +2,10 @@
 
 ESP32-based bridge that reads weight data from a Bluetooth (BLE) body composition scale and makes it available via a local web interface, MQTT, and HTTP webhooks.
 
+| Home | Settings | Settings |
+|------|----------|----------|
+| ![Home Page](resources/home.png) | ![Settings Page](resources/settings.png) | ![Settings Page 2](resources/settings_2.png) |
+
 ## Supported Hardware
 
 - **Microcontroller**: ESP32-WROOM-32 (any ESP32 dev board)
@@ -79,10 +83,6 @@ pio device monitor
 4. A toast notification appears when new data arrives
 
 > **Tip**: For full body composition analysis (body fat, muscle mass, water, etc.), step on the scale barefoot. With socks, only basic metrics (BMI, BMR, metabolic age) are available.
-
-| Home | Settings | Settings |
-|------|----------|----------|
-| ![Home Page](resources/home.png) | ![Settings Page](resources/settings.png) | ![Settings Page 2](resources/settings_2.png) |
 
 ### Settings
 
