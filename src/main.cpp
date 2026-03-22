@@ -44,6 +44,7 @@ unsigned long wifiLostTime = 0;
 
 volatile float finalWeight = 0;
 char finalWeightTime[20] = "";
+volatile bool doForward = false;
 
 // --- Preferences helpers ---
 
@@ -123,47 +124,74 @@ const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenTrackFit Setup</title>
 <style>
-  body{font-family:sans-serif;max-width:400px;margin:40px auto;padding:0 20px;background:#111;color:#eee}
-  h1{color:#4CAF50}
-  h2{color:#ccc;font-size:16px;margin-top:30px;border-bottom:1px solid #333;padding-bottom:8px}
-  input,select{width:100%;padding:12px;margin:8px 0;box-sizing:border-box;border-radius:6px;border:1px solid #555;background:#222;color:#eee;font-size:16px}
-  button{width:100%;padding:14px;margin-top:16px;background:#4CAF50;color:#fff;border:none;border-radius:6px;font-size:18px;cursor:pointer}
+  *{box-sizing:border-box}
+  body{font-family:sans-serif;max-width:560px;margin:0 auto;padding:30px 20px;background:#111;color:#eee}
+  h1{color:#4CAF50;margin-bottom:5px;font-size:clamp(22px,3.5vw,32px)}
+  .home{color:#888;font-size:clamp(13px,1.5vw,15px);text-decoration:none;display:block;margin-bottom:20px}
+  .card{background:#1a1a1a;border-radius:10px;padding:clamp(16px,3vw,28px);margin-bottom:18px}
+  .card h2{color:#ccc;font-size:clamp(14px,2vw,17px);margin:0 0 14px 0;padding-bottom:8px;border-bottom:1px solid #333}
+  input,select{width:100%;padding:clamp(10px,1.5vw,14px);margin:6px 0;border-radius:6px;border:1px solid #444;background:#222;color:#eee;font-size:clamp(14px,1.5vw,16px)}
+  label{display:block;margin-top:10px;color:#999;font-size:clamp(12px,1.5vw,14px)}
+  button{width:100%;padding:clamp(11px,1.5vw,15px);margin-top:14px;background:#4CAF50;color:#fff;border:none;border-radius:6px;font-size:clamp(15px,1.5vw,18px);cursor:pointer}
   button:hover{background:#45a049}
-  .info{color:#888;font-size:13px;margin-top:20px}
-  label{display:block;margin-top:10px;color:#aaa;font-size:14px}
+  .info{color:#888;font-size:clamp(11px,1.2vw,14px);margin-top:6px}
+  .msg{padding:10px;border-radius:6px;margin-top:10px;font-size:clamp(13px,1.5vw,15px);display:none}
+  .msg.ok{display:block;background:#1b3a1b;color:#4CAF50}
+  .msg.err{display:block;background:#3a1b1b;color:#f44336}
 </style>
 </head><body>
 <h1>OpenTrackFit</h1>
+<a class="home" href="/">Zurueck zur Startseite</a>
 
-<form action="/save" method="POST">
-<h2>WLAN</h2>
-  <label>SSID</label>
-  <select name="ssid" id="ssid" style="display:none"></select>
-  <input name="ssid_manual" id="ssid_manual" placeholder="WLAN Name">
-  <div id="scan-status" class="info">Scanne WLANs...</div>
-  <label>Passwort</label>
-  <input name="pass" type="password" placeholder="WLAN Passwort">
+<div class="card">
+  <h2>WLAN</h2>
+  <form action="/save/wifi" method="POST">
+    <label>SSID</label>
+    <select name="ssid" id="ssid" style="display:none"></select>
+    <input name="ssid_manual" id="ssid_manual" placeholder="WLAN Name">
+    <div class="info" id="scan-status">Scanne WLANs...</div>
+    <label>Passwort</label>
+    <input name="pass" type="password" placeholder="WLAN Passwort">
+    <button type="submit">WLAN speichern & verbinden</button>
+  </form>
+</div>
 
-<h2>MQTT</h2>
-  <label>Broker</label>
-  <input name="mqtt_broker" id="mqtt_broker" placeholder="z.B. 192.168.178.50">
-  <label>Port</label>
-  <input name="mqtt_port" id="mqtt_port" placeholder="1883" type="number">
-  <label>Topic</label>
-  <input name="mqtt_topic" id="mqtt_topic" placeholder="opentrackfit/weight">
-  <label>Benutzer (optional)</label>
-  <input name="mqtt_user" id="mqtt_user" placeholder="Benutzername">
-  <label>Passwort (optional)</label>
-  <input name="mqtt_pass" id="mqtt_pass" type="password" placeholder="Passwort">
+<div class="card">
+  <h2>MQTT</h2>
+  <form action="/save/mqtt" method="POST">
+    <label>Broker</label>
+    <input name="broker" id="mqtt_broker" placeholder="z.B. 192.168.178.50">
+    <label>Port</label>
+    <input name="port" id="mqtt_port" placeholder="1883" type="number">
+    <label>Topic</label>
+    <input name="topic" id="mqtt_topic" placeholder="opentrackfit/weight">
+    <label>Benutzer (optional)</label>
+    <input name="user" id="mqtt_user" placeholder="">
+    <label>Passwort (optional)</label>
+    <input name="pass" id="mqtt_pass" type="password" placeholder="">
+    <button type="submit">MQTT speichern</button>
+    <div class="msg" id="mqtt-msg"></div>
+  </form>
+</div>
 
-<h2>HTTP Webhook</h2>
-  <label>POST URL</label>
-  <input name="http_webhook" id="http_webhook" placeholder="https://example.com/webhook">
+<div class="card">
+  <h2>HTTP Webhook</h2>
+  <form action="/save/http" method="POST">
+    <label>POST URL</label>
+    <input name="webhook" id="http_webhook" placeholder="https://example.com/webhook">
+    <button type="submit">Webhook speichern</button>
+    <div class="msg" id="http-msg"></div>
+  </form>
+</div>
 
-  <button type="submit">Speichern & Verbinden</button>
-</form>
+<div class="card">
+  <h2>REST API</h2>
+  <p style="color:#999;font-size:14px;margin:0">Messdaten per API abrufen:</p>
+  <a href="/api/last-weight-data" target="_blank" style="display:block;margin-top:10px;color:#4CAF50;font-size:15px;word-break:break-all">/api/last-weight-data</a>
+  <p style="color:#666;font-size:12px;margin:6px 0 0">Dokumentation: <a href="/api/docs" target="_blank" style="color:#888">/api/docs</a></p>
+</div>
 
-<p class="info">AP schaltet sich nach 5 Minuten automatisch ab.</p>
+<p class="info" style="text-align:center;margin-top:20px">AP schaltet sich nach 5 Min. automatisch ab.</p>
 <script>
 fetch('/api/scan').then(r=>r.json()).then(d=>{
   var sel=document.getElementById('ssid');
@@ -201,6 +229,19 @@ fetch('/api/settings').then(r=>r.json()).then(d=>{
   if(d.mqtt_user) document.getElementById('mqtt_user').value=d.mqtt_user;
   if(d.http_webhook) document.getElementById('http_webhook').value=d.http_webhook;
 }).catch(()=>{});
+document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"]').forEach(function(f){
+  f.onsubmit=function(e){
+    e.preventDefault();
+    var fd=new FormData(f);
+    var id=f.action.includes('mqtt')?'mqtt-msg':'http-msg';
+    fetch(f.action,{method:'POST',body:new URLSearchParams(fd)})
+      .then(r=>r.json()).then(d=>{
+        var m=document.getElementById(id);
+        m.textContent=d.message;
+        m.className='msg '+(d.ok?'ok':'err');
+      }).catch(()=>{});
+  };
+});
 </script>
 </body></html>
 )rawliteral";
@@ -211,24 +252,23 @@ const char WEIGHT_PAGE[] PROGMEM = R"rawliteral(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenTrackFit</title>
 <style>
-  body{font-family:sans-serif;max-width:500px;margin:40px auto;padding:0 20px;background:#111;color:#eee;text-align:center}
-  h1{color:#4CAF50;margin-bottom:0}
-  .weight{font-size:72px;font-weight:bold;margin:40px 0 10px;color:#4CAF50}
-  .unit{font-size:28px;color:#888}
-  .status{font-size:16px;color:#888;margin-top:20px}
-  .settings{margin-top:40px}
-  .settings a{color:#888;font-size:13px}
+  body{font-family:sans-serif;max-width:600px;margin:0 auto;padding:60px 20px;background:#111;color:#eee;text-align:center}
+  h1{color:#4CAF50;margin-bottom:0;font-size:clamp(24px,4vw,36px)}
+  .weight{font-size:clamp(64px,12vw,120px);font-weight:bold;margin:50px 0 10px;color:#4CAF50}
+  .unit{font-size:clamp(24px,4vw,36px);color:#888}
+  .status{font-size:clamp(14px,2vw,18px);color:#888;margin-top:20px}
+  .settings{margin-top:50px}
+  .settings a{color:#888;font-size:clamp(13px,1.5vw,16px)}
 </style>
 </head><body>
 <h1>OpenTrackFit</h1>
-<div class="weight" id="weight">--.-</div>
-<div class="unit">kg</div>
+<div class="weight"><span id="weight">--.-</span> <span class="unit">kg</span></div>
 <div class="status" id="status">Noch keine Messung</div>
 <div class="status" id="time"></div>
 <div class="settings"><a href="/setup">Netzwerkeinstellungen</a></div>
 <script>
 function load(){
-  fetch('/api/weight').then(r=>r.json()).then(d=>{
+  fetch('/api/last-weight-data').then(r=>r.json()).then(d=>{
     if(d.weight>0){
       document.getElementById('weight').textContent=d.weight.toFixed(1);
       document.getElementById('status').textContent='Letzte Messung';
@@ -290,30 +330,17 @@ void handleSetup() {
     server.send(200, "text/html", CONFIG_PAGE);
 }
 
-void handleSave() {
+void handleSaveWifi() {
     String ssid = server.arg("ssid");
     if (ssid == "__manual__" || ssid.isEmpty()) ssid = server.arg("ssid_manual");
     String pass = server.arg("pass");
 
-    // Save MQTT settings
-    setPref("mqtt", "broker", server.arg("mqtt_broker"));
-    String port = server.arg("mqtt_port");
-    setPrefInt("mqtt", "port", port.isEmpty() ? 1883 : port.toInt());
-    setPref("mqtt", "topic", server.arg("mqtt_topic"));
-    setPref("mqtt", "user", server.arg("mqtt_user"));
-    setPref("mqtt", "pass", server.arg("mqtt_pass"));
-
-    // Save HTTP webhook
-    setPref("http", "webhook", server.arg("http_webhook"));
-
-    Serial.println("Settings saved.");
-
     if (ssid.isEmpty()) {
         server.send(200, "text/html",
-            "<html><body style='font-family:sans-serif;text-align:center;background:#111;color:#eee;padding:40px'>"
-            "<h2 style='color:#4CAF50'>Einstellungen gespeichert!</h2>"
-            "<p>MQTT und Webhook Einstellungen wurden aktualisiert.</p>"
-            "<a href='/' style='color:#4CAF50;font-size:18px'>Zurueck</a></body></html>");
+            "<html><head><meta http-equiv='refresh' content='3;url=/setup'></head>"
+            "<body style='font-family:sans-serif;text-align:center;background:#111;color:#eee;padding:40px'>"
+            "<h2 style='color:#f44336'>SSID fehlt</h2>"
+            "<p style='color:#888'>Weiterleitung in 3s...</p></body></html>");
         return;
     }
 
@@ -333,26 +360,44 @@ void handleSave() {
         setPref("wifi", "pass", pass);
         Serial.printf("WiFi OK. IP: %s\n", ip.c_str());
         server.send(200, "text/html",
-            "<html><body style='font-family:sans-serif;text-align:center;background:#111;color:#eee;padding:40px'>"
+            "<html><head><meta http-equiv='refresh' content='5;url=http://" + ip + "/'></head>"
+            "<body style='font-family:sans-serif;text-align:center;background:#111;color:#eee;padding:40px'>"
             "<h2 style='color:#4CAF50'>Verbunden!</h2>"
             "<p>WLAN: " + ssid + "</p>"
             "<p>IP: <strong>" + ip + "</strong></p>"
             "<p>mDNS: <strong>http://opentrackfit.local</strong></p>"
-            "<p style='color:#888;margin-top:20px'>Neustart in 3s...</p></body></html>");
-        delay(3000);
+            "<p style='color:#888;margin-top:20px'>Neustart in 5s...</p></body></html>");
+        delay(5000);
         ESP.restart();
     } else {
         WiFi.disconnect();
         WiFi.mode(WIFI_AP);
         Serial.println("WiFi test failed.");
         server.send(200, "text/html",
-            "<html><body style='font-family:sans-serif;text-align:center;background:#111;color:#eee;padding:40px'>"
-            "<h2 style='color:#f44336'>Verbindung fehlgeschlagen</h2>"
+            "<html><head><meta http-equiv='refresh' content='5;url=/setup'></head>"
+            "<body style='font-family:sans-serif;text-align:center;background:#111;color:#eee;padding:40px'>"
+            "<h2 style='color:#f44336'>WLAN Verbindung fehlgeschlagen</h2>"
             "<p>WLAN: " + ssid + "</p>"
             "<p>Bitte SSID und Passwort pruefen.</p>"
-            "<p style='color:#4CAF50;margin-top:10px'>MQTT/Webhook Einstellungen wurden trotzdem gespeichert.</p>"
-            "<a href='/' style='color:#4CAF50;font-size:18px'>Erneut versuchen</a></body></html>");
+            "<p style='color:#888;margin-top:20px'>Weiterleitung in 5s...</p></body></html>");
     }
+}
+
+void handleSaveMqtt() {
+    setPref("mqtt", "broker", server.arg("broker"));
+    String port = server.arg("port");
+    setPrefInt("mqtt", "port", port.isEmpty() ? 1883 : port.toInt());
+    setPref("mqtt", "topic", server.arg("topic"));
+    setPref("mqtt", "user", server.arg("user"));
+    setPref("mqtt", "pass", server.arg("pass"));
+    Serial.println("MQTT settings saved.");
+    server.send(200, "application/json", "{\"ok\":true,\"message\":\"MQTT Einstellungen gespeichert.\"}");
+}
+
+void handleSaveHttp() {
+    setPref("http", "webhook", server.arg("webhook"));
+    Serial.println("HTTP webhook saved.");
+    server.send(200, "application/json", "{\"ok\":true,\"message\":\"Webhook gespeichert.\"}");
 }
 
 void handleApiScan() {
@@ -383,13 +428,28 @@ void handleApiSettings() {
     server.send(200, "application/json", json);
 }
 
+void handleApiDocs() {
+    server.send(200, "application/json",
+        "{"
+        "\"name\":\"OpenTrackFit API\","
+        "\"version\":\"1.0\","
+        "\"endpoints\":{"
+          "\"GET /api/last-weight-data\":{\"description\":\"Letztes Messergebnis\",\"example\":{\"weight\":102.7,\"time\":\"22.03.2026 15:34\"},\"fields\":{\"weight\":\"Gewicht in kg (float, 0.0 wenn noch keine Messung)\",\"time\":\"Zeitpunkt der Messung (dd.mm.yyyy HH:MM, leer wenn kein NTP)\"}},"
+          "\"GET /api/docs\":{\"description\":\"Diese API-Dokumentation\"}"
+        "}"
+        "}");
+}
+
 void setupWebServer() {
     server.on("/", handleRoot);
     server.on("/setup", handleSetup);
-    server.on("/save", HTTP_POST, handleSave);
+    server.on("/save/wifi", HTTP_POST, handleSaveWifi);
+    server.on("/save/mqtt", HTTP_POST, handleSaveMqtt);
+    server.on("/save/http", HTTP_POST, handleSaveHttp);
     server.on("/api/scan", handleApiScan);
-    server.on("/api/weight", handleApiWeight);
+    server.on("/api/last-weight-data", handleApiWeight);
     server.on("/api/settings", handleApiSettings);
+    server.on("/api/docs", handleApiDocs);
     server.begin();
 }
 
@@ -426,7 +486,7 @@ void parseScaleData(uint8_t* data, size_t length) {
             strcpy(finalWeightTime, "");
         }
         Serial.printf(">>> FINAL WEIGHT: %.1f kg <<<\n", weight);
-        forwardWeight(weight, finalWeightTime);
+        doForward = true;
     } else {
         Serial.printf("  Measuring: %.1f kg\n", weight);
     }
@@ -544,6 +604,12 @@ void loop() {
         } else {
             wifiLostTime = 0;
         }
+    }
+
+    // Forward weight (deferred from BLE callback to main loop)
+    if (doForward) {
+        doForward = false;
+        forwardWeight(finalWeight, finalWeightTime);
     }
 
     // BLE connect
