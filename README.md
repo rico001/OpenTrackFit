@@ -42,7 +42,7 @@ OpenScale works with BLE body composition scales that use the **ElinkThings/SWAN
 
 ## Architecture
 
-![Architecture](resources/architecture.png)
+![Architecture](resources/architecture.svg)
 
 ## Getting Started
 
