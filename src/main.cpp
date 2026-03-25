@@ -48,6 +48,15 @@ volatile bool doForward = false;
 volatile bool weightReady = false;   // set after CA (stable weight), cleared after forward
 volatile uint16_t impedanceRaw = 0;  // BIA impedance from CB packets (ohms)
 
+// --- Sync Status ---
+char lastMqttSync[20] = "";
+bool lastMqttOk = false;
+char lastHttpSync[20] = "";
+bool lastHttpOk = false;
+
+// --- Buzzer ---
+int buzzerPin = -1;
+
 // --- Body Composition Data ---
 struct BodyData {
     float weight;          // kg
@@ -99,6 +108,25 @@ void setPrefInt(const char* ns, const char* key, uint16_t val) {
     prefs.begin(ns, false);
     prefs.putUShort(key, val);
     prefs.end();
+}
+
+void setupBuzzer() {
+    int pin = getPrefInt("hw", "buzzer", 0);
+    if (pin > 0) {
+        buzzerPin = pin;
+        pinMode(buzzerPin, OUTPUT);
+        digitalWrite(buzzerPin, LOW);
+        Serial.printf("Buzzer on GPIO %d\n", buzzerPin);
+    } else {
+        buzzerPin = -1;
+    }
+}
+
+void beep() {
+    if (buzzerPin < 0) return;
+    digitalWrite(buzzerPin, HIGH);
+    delay(300);
+    digitalWrite(buzzerPin, LOW);
 }
 
 void saveBodyData() {
@@ -348,6 +376,7 @@ String buildBodyJson() {
 }
 
 void forwardWeight(float weight, const char* time) {
+    beep();
     calculateBodyComposition(weight, time);
     saveBodyData();
     String json = buildBodyJson();
@@ -362,30 +391,53 @@ void forwardWeight(float weight, const char* time) {
         String pass = getPref("mqtt", "pass");
 
         mqttClient.setServer(broker.c_str(), port);
-        bool ok;
-        if (!user.isEmpty()) {
-            ok = mqttClient.connect("OpenScale", user.c_str(), pass.c_str());
-        } else {
-            ok = mqttClient.connect("OpenScale");
+        mqttClient.setBufferSize(1024);
+        lastMqttOk = false;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            bool ok;
+            if (!user.isEmpty()) {
+                ok = mqttClient.connect("OpenScale", user.c_str(), pass.c_str());
+            } else {
+                ok = mqttClient.connect("OpenScale");
+            }
+            if (ok) {
+                if (mqttClient.publish(topic.c_str(), json.c_str())) {
+                    Serial.printf("MQTT published to %s (%d bytes)\n", topic.c_str(), json.length());
+                    lastMqttOk = true;
+                } else {
+                    Serial.printf("MQTT publish failed (payload %d bytes)\n", json.length());
+                }
+                mqttClient.disconnect();
+                break;
+            }
+            Serial.printf("MQTT connect failed (rc=%d), attempt %d/3\n", mqttClient.state(), attempt);
+            if (attempt < 3) delay(500);
         }
-        if (ok) {
-            mqttClient.publish(topic.c_str(), json.c_str());
-            Serial.printf("MQTT published to %s\n", topic.c_str());
-            mqttClient.disconnect();
-        } else {
-            Serial.printf("MQTT connect failed (rc=%d)\n", mqttClient.state());
-        }
+        struct tm ti;
+        if (getLocalTime(&ti)) strftime(lastMqttSync, sizeof(lastMqttSync), "%d.%m.%Y %H:%M:%S", &ti);
+        else strcpy(lastMqttSync, time);
     }
 
     // HTTP Webhook
     String webhook = getPref("http", "webhook");
     if (!webhook.isEmpty() && WiFi.status() == WL_CONNECTED) {
-        HTTPClient http;
-        http.begin(webhook);
-        http.addHeader("Content-Type", "application/json");
-        int code = http.POST(json);
-        Serial.printf("HTTP POST %s -> %d\n", webhook.c_str(), code);
-        http.end();
+        lastHttpOk = false;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            HTTPClient http;
+            http.begin(webhook);
+            http.addHeader("Content-Type", "application/json");
+            int code = http.POST(json);
+            Serial.printf("HTTP POST %s -> %d, attempt %d/3\n", webhook.c_str(), code, attempt);
+            http.end();
+            if (code >= 200 && code < 300) {
+                lastHttpOk = true;
+                break;
+            }
+            if (attempt < 3) delay(500);
+        }
+        struct tm ti;
+        if (getLocalTime(&ti)) strftime(lastHttpSync, sizeof(lastHttpSync), "%d.%m.%Y %H:%M:%S", &ti);
+        else strcpy(lastHttpSync, time);
     }
 }
 
@@ -400,8 +452,20 @@ const char WEIGHT_PAGE[] PROGMEM = R"rawliteral(
 <title>OpenScale</title>
 <style>
   *{box-sizing:border-box}
-  body{font-family:sans-serif;max-width:600px;margin:0 auto;padding:30px 16px;background:#111;color:#eee;text-align:center}
-  h1{color:#4CAF50;margin-bottom:0;font-size:clamp(22px,4vw,32px)}
+  body{font-family:sans-serif;max-width:600px;margin:0 auto;padding:0 16px 30px;background:#111;color:#eee;text-align:center}
+  .status-bar{display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 0;font-size:11px;color:#555;border-bottom:1px solid #222;margin:0 -16px 0;padding:6px 16px}
+  .status-bar .ble{display:flex;align-items:center;gap:4px}
+  .status-bar .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;transition:background 0.3s}
+  .status-bar .dot.connected{background:#4CAF50}
+  .status-bar .dot.scanning{background:#FFC107}
+  .status-bar .dot.disconnected{background:#f44336}
+  .status-bar .sep{color:#333}
+  .status-bar .sync{color:#555}
+  .status-bar .sync .ok{color:#4CAF50}
+  .status-bar .sync .fail{color:#f44336}
+  .status-bar.warn{background:#2a2211;border-bottom-color:#FFC107}
+  .status-bar.offline{background:#2a1111;border-bottom-color:#f44336}
+  h1{color:#4CAF50;margin-bottom:0;font-size:clamp(22px,4vw,32px);margin-top:20px}
   .hero{margin:40px 0 10px}
   .hero .val{font-size:clamp(72px,15vw,130px);font-weight:bold;color:#4CAF50;line-height:1}
   .hero .unit{font-size:clamp(24px,4vw,36px);color:#888}
@@ -419,6 +483,7 @@ const char WEIGHT_PAGE[] PROGMEM = R"rawliteral(
   .toast.show{opacity:1}
 </style>
 </head><body>
+<div class="status-bar" id="status-bar"><span class="ble"><span class="dot disconnected" id="ble-dot"></span><span id="ble-text">Waage</span></span><span id="sync-info"></span></div>
 <h1>OpenScale</h1>
 <div id="history-link" style="display:none;margin-top:4px"><a id="history-href" href="#" style="color:#888;font-size:clamp(13px,1.5vw,15px);text-decoration:none">zur History</a></div>
 <div id="profile-name" style="color:#888;font-size:clamp(14px,2vw,18px);margin-top:6px"></div>
@@ -452,6 +517,7 @@ const char WEIGHT_PAGE[] PROGMEM = R"rawliteral(
 <div class="settings"><a href="/setup">Einstellungen</a></div>
 <div class="toast" id="toast"></div>
 <script>
+function fetchT(url){var c=new AbortController();setTimeout(function(){c.abort()},3000);return fetch(url,{signal:c.signal})}
 function f1(v){return v.toFixed(1)}
 function v1(x){return x!==null?f1(x):'k.A.'}
 var lastTime='';
@@ -461,7 +527,7 @@ function showToast(msg){
   setTimeout(function(){t.classList.remove('show')},3000);
 }
 function load(){
-  fetch('/api/last-weight-data').then(r=>r.json()).then(d=>{
+  fetchT('/api/last-weight-data').then(r=>r.json()).then(d=>{
     if(d.profile) document.getElementById('profile-name').textContent=d.profile;
     if(d.weight>0){
       document.getElementById('weight').textContent=f1(d.weight);
@@ -495,9 +561,42 @@ function load(){
     }
   }).catch(()=>{});
 }
-load();
-setInterval(load,5000);
-fetch('/api/settings').then(r=>r.json()).then(d=>{
+var failCount=0;
+function setOffline(){
+  failCount++;
+  var bar=document.getElementById('status-bar');
+  var dot=document.getElementById('ble-dot');
+  var txt=document.getElementById('ble-text');
+  if(failCount>6){bar.className='status-bar offline';dot.className='dot disconnected';txt.textContent='Offline';}
+  else if(failCount>3){bar.className='status-bar warn';dot.className='dot scanning';txt.textContent='Verbindungsproblem';}
+  else{bar.className='status-bar';return;}
+  document.getElementById('sync-info').innerHTML='';
+}
+function loadStatus(){
+  fetchT('/api/status').then(function(r){if(!r.ok)throw 0;return r.json()}).then(d=>{
+    failCount=0;
+    var bar=document.getElementById('status-bar');
+    bar.className='status-bar';
+    var dot=document.getElementById('ble-dot');
+    var txt=document.getElementById('ble-text');
+    dot.className='dot '+(d.ble_connected?'connected':d.ble_scanning?'scanning':'disconnected');
+    txt.textContent=d.ble_connected?'Waage verbunden':d.ble_scanning?'Suche Waage...':'Waage getrennt';
+    var si=document.getElementById('sync-info');
+    var parts=[];
+    if(d.mqtt_configured){
+      if(d.mqtt_last_sync){var c=d.mqtt_last_ok?'ok':'fail';parts.push('<span class="sync"><span class="'+c+'">\u2022</span> MQTT '+d.mqtt_last_sync.slice(11,16)+'</span>');}
+      else parts.push('<span class="sync">\u2022 MQTT</span>');
+    }
+    if(d.http_configured){
+      if(d.http_last_sync){var c=d.http_last_ok?'ok':'fail';parts.push('<span class="sync"><span class="'+c+'">\u2022</span> HTTP '+d.http_last_sync.slice(11,16)+'</span>');}
+      else parts.push('<span class="sync">\u2022 HTTP</span>');
+    }
+    si.innerHTML=parts.length?'<span class="sep">|</span> '+parts.join(' '):'';
+  }).catch(setOffline);
+}
+load();loadStatus();
+setInterval(load,5000);setInterval(loadStatus,3000);
+fetchT('/api/settings').then(r=>r.json()).then(d=>{
   if(d.history_url){
     document.getElementById('history-href').href=d.history_url;
     document.getElementById('history-link').style.display='block';
@@ -625,6 +724,18 @@ void handleSaveHttp() {
     server.send(200, "application/json", "{\"ok\":true,\"message\":\"Webhook gespeichert.\"}");
 }
 
+void handleSaveBuzzer() {
+    String pin = server.arg("buzzer_pin");
+    uint16_t val = pin.isEmpty() ? 0 : pin.toInt();
+    setPrefInt("hw", "buzzer", val);
+    setupBuzzer();
+    if (buzzerPin > 0) beep();
+    Serial.printf("Buzzer pin saved: %d\n", val);
+    server.send(200, "application/json", val > 0
+        ? "{\"ok\":true,\"message\":\"Buzzer gespeichert. Testton ausgegeben.\"}"
+        : "{\"ok\":true,\"message\":\"Buzzer deaktiviert.\"}");
+}
+
 void handleSaveHistory() {
     setPref("http", "history", server.arg("history_url"));
     Serial.println("History URL saved.");
@@ -728,6 +839,7 @@ void handleApiSettings() {
     json += ",\"mqtt_user\":\"" + getPref("mqtt", "user") + "\"";
     json += ",\"http_webhook\":\"" + getPref("http", "webhook") + "\"";
     json += ",\"history_url\":\"" + getPref("http", "history") + "\"";
+    json += ",\"buzzer_pin\":" + String(getPrefInt("hw", "buzzer", 0));
     // Profiles
     int count = getProfileCount();
     int active = getActiveIndex();
@@ -740,6 +852,31 @@ void handleApiSettings() {
         json += ",\"active\":" + String(i == active ? "true" : "false") + "}";
     }
     json += "]";
+    json += "}";
+    server.send(200, "application/json", json);
+}
+
+void handleApiStatus() {
+    String json = "{\"ble_connected\":";
+    json += connected ? "true" : "false";
+    json += ",\"ble_scanning\":";
+    json += scanning ? "true" : "false";
+    // MQTT sync
+    json += ",\"mqtt_configured\":";
+    json += !getPref("mqtt", "broker").isEmpty() ? "true" : "false";
+    if (lastMqttSync[0]) {
+        json += ",\"mqtt_last_sync\":\"" + String(lastMqttSync) + "\"";
+        json += ",\"mqtt_last_ok\":";
+        json += lastMqttOk ? "true" : "false";
+    }
+    // HTTP sync
+    json += ",\"http_configured\":";
+    json += !getPref("http", "webhook").isEmpty() ? "true" : "false";
+    if (lastHttpSync[0]) {
+        json += ",\"http_last_sync\":\"" + String(lastHttpSync) + "\"";
+        json += ",\"http_last_ok\":";
+        json += lastHttpOk ? "true" : "false";
+    }
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -777,6 +914,7 @@ void handleApiDocs() {
             "},"
             "\"note\":\"Alle Felder ausser weight und time erfordern ein Profil. body_analysis zeigt ob BIA-Impedanzmessung erfolgreich war. BIA-abhaengige Felder (body_fat_pct, muscle_pct, water_pct, bone_mass, protein_pct, protein_mass, subcutaneous_fat_pct, fat_mass, fat_free_weight, muscle_mass) sind null wenn body_analysis=false. Immer verfuegbar mit Profil: bmi, bmr, metabolic_age, visceral_fat, ideal_weight, weight_control. impedance nur vorhanden bei barfuss-Messung.\""
           "},"
+          "\"GET /api/status\":{\"description\":\"System-Status (BLE, Sync)\",\"fields\":{\"ble_connected\":\"true wenn mit Waage verbunden\",\"ble_scanning\":\"true wenn nach Waage gesucht wird\",\"mqtt_configured\":\"true wenn MQTT konfiguriert\",\"mqtt_last_sync\":\"Zeitpunkt letzter MQTT-Sync\",\"mqtt_last_ok\":\"true wenn letzter MQTT-Sync erfolgreich\",\"http_configured\":\"true wenn HTTP-Webhook konfiguriert\",\"http_last_sync\":\"Zeitpunkt letzter HTTP-Sync\",\"http_last_ok\":\"true wenn letzter HTTP-Sync erfolgreich\"}},"
           "\"GET /api/settings\":{\"description\":\"Aktuelle Einstellungen und Profile\"},"
           "\"GET /api/docs\":{\"description\":\"Diese API-Dokumentation\"}"
         "}"
@@ -789,6 +927,7 @@ void setupWebServer() {
     server.on("/save/wifi", HTTP_POST, handleSaveWifi);
     server.on("/save/mqtt", HTTP_POST, handleSaveMqtt);
     server.on("/save/http", HTTP_POST, handleSaveHttp);
+    server.on("/save/buzzer", HTTP_POST, handleSaveBuzzer);
     server.on("/save/history-app", HTTP_POST, handleSaveHistory);
     server.on("/save/profile", HTTP_POST, handleSaveProfile);
     server.on("/delete/profile", HTTP_POST, handleDeleteProfile);
@@ -796,6 +935,7 @@ void setupWebServer() {
     server.on("/api/scan", handleApiScan);
     server.on("/api/last-weight-data", handleApiWeight);
     server.on("/api/settings", handleApiSettings);
+    server.on("/api/status", handleApiStatus);
     server.on("/api/docs", handleApiDocs);
     server.begin();
 }
@@ -961,6 +1101,7 @@ void setup() {
     Serial.println("\n=== OpenScale ===");
 
     loadBodyData();
+    setupBuzzer();
     setupBLE();
 
     if (connectWiFi()) {
@@ -1019,14 +1160,22 @@ void loop() {
         forwardWeight(finalWeight, finalWeightTime);
     }
 
-    // BLE connect
+    // BLE connect (retry up to 3 times before falling back to scan)
     if (doConnect && !connected) {
-        connectToScale();
+        bool ok = false;
+        for (int attempt = 1; attempt <= 3 && !ok; attempt++) {
+            if (attempt > 1) {
+                Serial.printf("Retry %d/3...\n", attempt);
+                delay(200);
+            }
+            ok = connectToScale();
+        }
         doConnect = false;
     }
 
     // BLE non-blocking scan
     if (!connected && !doConnect && !scanning) {
+        pBLEScan->clearResults();
         pBLEScan->start(5, [](BLEScanResults) { scanning = false; }, false);
         scanning = true;
     }

@@ -109,6 +109,17 @@ const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
 </div>
 
 <div class="card">
+  <h2>Buzzer</h2>
+  <form action="/save/buzzer" method="POST">
+    <label>GPIO Pin (0 = deaktiviert)</label>
+    <input name="buzzer_pin" id="buzzer_pin" type="number" min="0" max="39" placeholder="z.B. 25">
+    <div class="info">Piezo-Buzzer piept 1 Sek. bei erfolgreicher Messung</div>
+    <button type="submit">Buzzer speichern</button>
+    <div class="msg" id="buzzer-msg"></div>
+  </form>
+</div>
+
+<div class="card">
   <h2>REST API</h2>
   <p style="color:#999;font-size:14px;margin:0">Messdaten per API abrufen:</p>
   <a href="/api/last-weight-data" target="_blank" style="display:block;margin-top:10px;color:#4CAF50;font-size:15px;word-break:break-all">/api/last-weight-data</a>
@@ -178,6 +189,7 @@ function loadSettings(){
     if(d.mqtt_user) document.getElementById('mqtt_user').value=d.mqtt_user;
     if(d.http_webhook) document.getElementById('http_webhook').value=d.http_webhook;
     if(d.history_url) document.getElementById('history_url').value=d.history_url;
+    if(d.buzzer_pin) document.getElementById('buzzer_pin').value=d.buzzer_pin;
     renderProfiles(d.profiles||[]);
   }).catch(()=>{});
 }
@@ -213,11 +225,11 @@ function editProfile(name,g,a,h){
   document.getElementById('pf_height').value=h;
 }
 loadSettings();
-document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"],form[action="/save/history-app"]').forEach(function(f){
+document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"],form[action="/save/buzzer"],form[action="/save/history-app"]').forEach(function(f){
   f.onsubmit=function(e){
     e.preventDefault();
     var fd=new FormData(f);
-    var id=f.action.includes('mqtt')?'mqtt-msg':f.action.includes('history')?'history-msg':'http-msg';
+    var id=f.action.includes('mqtt')?'mqtt-msg':f.action.includes('buzzer')?'buzzer-msg':f.action.includes('history')?'history-msg':'http-msg';
     api(f.action,{method:'POST',body:new URLSearchParams(fd)})
       .then(d=>{
         var m=document.getElementById(id);
