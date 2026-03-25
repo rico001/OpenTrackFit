@@ -428,10 +428,17 @@ String buildBodyJson() {
     return j;
 }
 
-void publishHaDiscovery(const char* topic) {
-    // Device block shared by all sensors
-    const char* dev = "\"dev\":{\"ids\":[\"openscale\"],\"name\":\"OpenScale\",\"mf\":\"OpenTrackFit\",\"mdl\":\"ESP32 BLE Scale\"}";
-    String stateTopic = String("\"stat_t\":\"") + topic + "\"";
+void publishHaDiscovery(const char* topic, const String& profile) {
+    // Build profile-specific identifiers (lowercase, no spaces)
+    String profLower = profile;
+    profLower.toLowerCase();
+    profLower.replace(" ", "_");
+    String nodeId = "openscale_" + profLower;  // e.g. openscale_peter
+    String devName = "OpenScale " + profile;   // e.g. "OpenScale Peter"
+    String dev = "\"dev\":{\"ids\":[\"" + nodeId + "\"],\"name\":\"" + devName + "\",\"mf\":\"OpenTrackFit\",\"mdl\":\"ESP32 BLE Scale\"}";
+    // State topic per profile: e.g. openscale/weight/peter
+    String stateTopic = String(topic) + "/" + profLower;
+    String stateTopicJson = "\"stat_t\":\"" + stateTopic + "\"";
 
     struct HaSensor { const char* id; const char* name; const char* unit; const char* devClass; const char* tpl; };
     HaSensor sensors[] = {
@@ -456,18 +463,18 @@ void publishHaDiscovery(const char* topic) {
     };
 
     for (auto& s : sensors) {
-        String configTopic = "homeassistant/sensor/openscale/" + String(s.id) + "/config";
+        String configTopic = "homeassistant/sensor/" + nodeId + "/" + String(s.id) + "/config";
         String payload = "{\"name\":\"" + String(s.name) + "\""
-            ",\"uniq_id\":\"openscale_" + String(s.id) + "\""
-            "," + stateTopic +
+            ",\"uniq_id\":\"" + nodeId + "_" + String(s.id) + "\""
+            "," + stateTopicJson +
             ",\"val_tpl\":\"" + String(s.tpl) + "\""
             ",\"unit_of_meas\":\"" + String(s.unit) + "\""
             ",\"stat_cla\":\"measurement\"";
         if (s.devClass) payload += ",\"dev_cla\":\"" + String(s.devClass) + "\"";
-        payload += "," + String(dev) + "}";
+        payload += "," + dev + "}";
         mqttClient.publish(configTopic.c_str(), payload.c_str(), true);
     }
-    Serial.println("HA MQTT Discovery configs published");
+    Serial.printf("HA Discovery published for profile: %s\n", profile.c_str());
 }
 
 void forwardWeight(float weight, const char* time) {
@@ -498,8 +505,16 @@ void forwardWeight(float weight, const char* time) {
                 ok = mqttClient.connect("OpenScale");
             }
             if (ok) {
-                if (getPrefInt("mqtt", "ha", 0) == 1) {
-                    publishHaDiscovery(topic.c_str());
+                bool haDiscovery = getPrefInt("mqtt", "ha", 0) == 1 && !activeProfileName.isEmpty();
+                if (haDiscovery) {
+                    publishHaDiscovery(topic.c_str(), activeProfileName);
+                    // Publish on profile-specific state topic
+                    String profLower = activeProfileName;
+                    profLower.toLowerCase();
+                    profLower.replace(" ", "_");
+                    String profTopic = topic + "/" + profLower;
+                    mqttClient.publish(profTopic.c_str(), json.c_str(), retain);
+                    Serial.printf("MQTT published to %s (HA)\n", profTopic.c_str());
                 }
                 if (mqttClient.publish(topic.c_str(), json.c_str(), retain)) {
                     Serial.printf("MQTT published to %s (%d bytes)\n", topic.c_str(), json.length());
