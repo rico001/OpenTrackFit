@@ -116,6 +116,22 @@ const char CONFIG_PAGE[] PROGMEM = R"rawliteral(
 </div>
 
 <div class="card">
+  <h2>Home Assistant</h2>
+  <form action="/save/ha" method="POST">
+    <label>Home Assistant URL</label>
+    <input name="ha_url" id="ha_url" placeholder="http://192.168.178.50:8123">
+    <label>Long-Lived Access Token</label>
+    <input name="ha_token" id="ha_token" type="password" placeholder="eyJhbG...">
+    <div class="info">Erstellen unter: Profil &rarr; Sicherheit &rarr; Langlebige Zugriffstokens</div>
+    <label>Sensor-Pr&auml;fix</label>
+    <input name="ha_prefix" id="ha_prefix" placeholder="openscale">
+    <div class="info">Sensoren: sensor.&lt;pr&auml;fix&gt;_weight, _bmi, _body_fat, _muscle, usw.</div>
+    <button type="submit">Home Assistant speichern</button>
+    <div class="msg" id="ha-msg"></div>
+  </form>
+</div>
+
+<div class="card">
   <h2>History-App</h2>
   <form action="/save/history-app" method="POST">
     <label>URL zur History-App</label>
@@ -226,6 +242,9 @@ function loadSettings(){
     if(d.mqtt_user) document.getElementById('mqtt_user').value=d.mqtt_user;
     if(d.mqtt_retain) document.getElementById('mqtt_retain').checked=true;
     if(d.http_webhook) document.getElementById('http_webhook').value=d.http_webhook;
+    if(d.ha_url) document.getElementById('ha_url').value=d.ha_url;
+    if(d.ha_token) document.getElementById('ha_token').value=d.ha_token;
+    if(d.ha_prefix) document.getElementById('ha_prefix').value=d.ha_prefix;
     if(d.history_url) document.getElementById('history_url').value=d.history_url;
     if(d.buzzer_pin) document.getElementById('buzzer_pin').value=d.buzzer_pin;
     if(d.build_time) document.getElementById('build-info').textContent='Build: '+d.build_time;
@@ -304,11 +323,11 @@ document.getElementById('auto-profile-form').onsubmit=function(e){
       m.textContent=d.message;m.className='msg '+(d.ok?'ok':'err');
     }).catch(()=>{});
 };
-document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"],form[action="/save/buzzer"],form[action="/save/history-app"]').forEach(function(f){
+document.querySelectorAll('form[action="/save/mqtt"],form[action="/save/http"],form[action="/save/ha"],form[action="/save/buzzer"],form[action="/save/history-app"]').forEach(function(f){
   f.onsubmit=function(e){
     e.preventDefault();
     var fd=new FormData(f);
-    var id=f.action.includes('mqtt')?'mqtt-msg':f.action.includes('buzzer')?'buzzer-msg':f.action.includes('history')?'history-msg':'http-msg';
+    var id=f.action.includes('mqtt')?'mqtt-msg':f.action.includes('/ha')?'ha-msg':f.action.includes('buzzer')?'buzzer-msg':f.action.includes('history')?'history-msg':'http-msg';
     api(f.action,{method:'POST',body:new URLSearchParams(fd)})
       .then(d=>{
         var m=document.getElementById(id);

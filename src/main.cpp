@@ -56,6 +56,8 @@ char lastMqttSync[20] = "";
 bool lastMqttOk = false;
 char lastHttpSync[20] = "";
 bool lastHttpOk = false;
+char lastHaSync[20] = "";
+bool lastHaOk = false;
 
 // --- Buzzer ---
 int buzzerPin = -1;
@@ -494,6 +496,68 @@ void forwardWeight(float weight, const char* time) {
         if (getLocalTime(&ti)) strftime(lastHttpSync, sizeof(lastHttpSync), "%d.%m.%Y %H:%M:%S", &ti);
         else strcpy(lastHttpSync, time);
     }
+
+    // Home Assistant REST API — each metric as its own sensor
+    String haUrl = getPref("ha", "url");
+    String haToken = getPref("ha", "token");
+    if (!haUrl.isEmpty() && !haToken.isEmpty() && WiFi.status() == WL_CONNECTED) {
+        if (haUrl.endsWith("/")) haUrl.remove(haUrl.length() - 1);
+        String prefix = getPref("ha", "prefix");
+        if (prefix.isEmpty()) prefix = "openscale";
+        String apiBase = haUrl + "/api/states/sensor." + prefix + "_";
+
+        int haOkCount = 0, haTotal = 0;
+        auto haPost = [&](const char* suffix, const String& state, const String& unit, const String& devClass) {
+            haTotal++;
+            String payload = "{\"state\":\"" + state + "\",\"attributes\":{"
+                "\"unit_of_measurement\":\"" + unit + "\""
+                ",\"friendly_name\":\"OpenScale " + String(suffix) + "\"";
+            if (devClass.length()) payload += ",\"device_class\":\"" + devClass + "\"";
+            payload += ",\"state_class\":\"measurement\"}}";
+            HTTPClient http;
+            http.begin(apiBase + suffix);
+            http.addHeader("Content-Type", "application/json");
+            http.addHeader("Authorization", "Bearer " + haToken);
+            int code = http.POST(payload);
+            http.end();
+            if (code >= 200 && code < 300) haOkCount++;
+            else Serial.printf("HA %s -> %d\n", suffix, code);
+        };
+
+        // Weight (always)
+        haPost("weight", String(bodyData.weight, 1), "kg", "weight");
+
+        // Profile-based metrics
+        if (bodyData.bmi > 0) {
+            haPost("bmi", String(bodyData.bmi, 1), "kg/m²", "");
+            haPost("bmr", String((int)bodyData.bmr), "kcal", "");
+            haPost("metabolic_age", String(bodyData.metabolicAge), "Jahre", "");
+            haPost("visceral_fat", String(bodyData.visceralFat), "", "");
+            haPost("ideal_weight", String(bodyData.idealWeight, 1), "kg", "weight");
+            haPost("weight_control", String(bodyData.weightControl, 1), "kg", "weight");
+        }
+
+        // BIA-dependent metrics (only when barefoot/impedance)
+        if (bodyData.biaValid) {
+            haPost("body_fat", String(bodyData.bodyFatPct, 1), "%", "");
+            haPost("muscle", String(bodyData.musclePct, 1), "%", "");
+            haPost("water", String(bodyData.waterPct, 1), "%", "");
+            haPost("bone_mass", String(bodyData.boneMass, 1), "kg", "weight");
+            haPost("protein", String(bodyData.proteinPct, 1), "%", "");
+            haPost("subcutaneous_fat", String(bodyData.subcutFatPct, 1), "%", "");
+            haPost("fat_mass", String(bodyData.fatMass, 1), "kg", "weight");
+            haPost("fat_free_weight", String(bodyData.fatFreeWeight, 1), "kg", "weight");
+            haPost("muscle_mass", String(bodyData.muscleMass, 1), "kg", "weight");
+            haPost("protein_mass", String(bodyData.proteinMass, 1), "kg", "weight");
+            haPost("impedance", String(bodyData.impedance), "Ω", "");
+        }
+
+        lastHaOk = (haOkCount == haTotal);
+        Serial.printf("HA: %d/%d sensors updated\n", haOkCount, haTotal);
+        struct tm ti;
+        if (getLocalTime(&ti)) strftime(lastHaSync, sizeof(lastHaSync), "%d.%m.%Y %H:%M:%S", &ti);
+        else strcpy(lastHaSync, time);
+    }
 }
 
 // --- HTML ---
@@ -785,6 +849,14 @@ void handleSaveHttp() {
     server.send(200, "application/json", "{\"ok\":true,\"message\":\"Webhook gespeichert.\"}");
 }
 
+void handleSaveHa() {
+    setPref("ha", "url", server.arg("ha_url"));
+    setPref("ha", "token", server.arg("ha_token"));
+    setPref("ha", "prefix", server.arg("ha_prefix"));
+    Serial.println("Home Assistant settings saved.");
+    server.send(200, "application/json", "{\"ok\":true,\"message\":\"Home Assistant Einstellungen gespeichert.\"}");
+}
+
 void handleSaveBuzzer() {
     String pin = server.arg("buzzer_pin");
     uint16_t val = pin.isEmpty() ? 0 : pin.toInt();
@@ -930,6 +1002,9 @@ void handleApiSettings() {
     json += getPrefInt("mqtt", "retain", 0) ? "true" : "false";
     json += ",\"http_webhook\":\"" + getPref("http", "webhook") + "\"";
     json += ",\"history_url\":\"" + getPref("http", "history") + "\"";
+    json += ",\"ha_url\":\"" + getPref("ha", "url") + "\"";
+    json += ",\"ha_token\":\"" + getPref("ha", "token") + "\"";
+    json += ",\"ha_prefix\":\"" + getPref("ha", "prefix") + "\"";
     json += ",\"buzzer_pin\":" + String(getPrefInt("hw", "buzzer", 0));
     // Profiles
     int count = getProfileCount();
@@ -981,6 +1056,14 @@ void handleApiStatus() {
         json += ",\"http_last_sync\":\"" + String(lastHttpSync) + "\"";
         json += ",\"http_last_ok\":";
         json += lastHttpOk ? "true" : "false";
+    }
+    // Home Assistant sync
+    json += ",\"ha_configured\":";
+    json += (!getPref("ha", "url").isEmpty() && !getPref("ha", "token").isEmpty()) ? "true" : "false";
+    if (lastHaSync[0]) {
+        json += ",\"ha_last_sync\":\"" + String(lastHaSync) + "\"";
+        json += ",\"ha_last_ok\":";
+        json += lastHaOk ? "true" : "false";
     }
     json += "}";
     server.send(200, "application/json", json);
@@ -1063,6 +1146,7 @@ void setupWebServer() {
     server.on("/save/wifi", HTTP_POST, handleSaveWifi);
     server.on("/save/mqtt", HTTP_POST, handleSaveMqtt);
     server.on("/save/http", HTTP_POST, handleSaveHttp);
+    server.on("/save/ha", HTTP_POST, handleSaveHa);
     server.on("/save/buzzer", HTTP_POST, handleSaveBuzzer);
     server.on("/save/history-app", HTTP_POST, handleSaveHistory);
     server.on("/save/profile", HTTP_POST, handleSaveProfile);
